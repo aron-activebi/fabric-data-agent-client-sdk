@@ -1,0 +1,170 @@
+
+
+@apiVersion = {{$dotenv API_VERSION}}
+@workspace_id = {{$dotenv WORKSPACE_ID}}
+@data_agent_id = {{$dotenv AGENT_ID}}
+@assistantId = {{$dotenv ASSISTANT_ID}}
+@accessToken = {{$dotenv ACCESS_TOKEN}}
+
+### URL base publicada do Data Agent.
+### Valores lidos do arquivo .env pela extensao REST Client via {{$dotenv NOME_DA_VARIAVEL}}.
+### A extensao procura .env na pasta deste arquivo e depois nas pastas acima.
+
+@baseUrl = https://api.fabric.microsoft.com/v1/workspaces/{{workspace_id}}/dataagents/{{data_agent_id}}
+@dataAgentOpenAiUrl = {{baseUrl}}/aiassistant/openai
+
+### URL privada usada pelo SDK oficial para obter/criar thread por tag.
+### Se ela falhar com MonikerID vazio, pule a etapa 0 e use um thread_id existente.
+@privateAiAssistantUrl = {{baseUrl}}/__private/aiassistant
+
+### Token esperado no .env como ACCESS_TOKEN, somente o valor, sem Bearer.
+### Para gerar: az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv
+
+### Pergunta de teste.
+@question = compare the market share of dell and lenovo in the first quarter
+
+
+
+
+### Se voce ja tem um thread_id, pode usar direto e pular a etapa 0.
+
+### Nome/tag para criar ou reutilizar thread via SDK-style.
+@threadName = rest-client-test
+
+
+### ROTA PARA CRIAR UMA THREAD 
+
+# @name getThread
+GET {{privateAiAssistantUrl}}/threads/fabric?tag="{{threadName}}"
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+Content-Type: application/json
+ActivityId: {{$guid}}
+
+###
+@threadId = {{getThread.response.body.$.id}}
+
+
+
+
+
+
+# @name createAssistant
+POST {{dataAgentOpenAiUrl}}/assistants?api-version={{apiVersion}}
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+Content-Type: application/json
+ActivityId: {{$guid}}
+
+{
+  "model": "not used"
+}
+
+### PRIMEIRO AQUI
+### 1. Criar mensagem com a pergunta
+### Esta chamada NAO retorna a resposta do assistant.
+### Ela apenas adiciona a pergunta no thread.
+# @name createMessage
+POST {{dataAgentOpenAiUrl}}/threads/{{threadId}}/messages?api-version={{apiVersion}}
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+Content-Type: application/json
+ActivityId: {{$guid}}
+
+{
+  "role": "user",
+  "content": "{{question}}"
+}
+###
+
+@messageID = {{createMessage.response.body.$.id}}
+### QUARTO AQUI
+### Pegar respotas
+# @name getMessages
+GET {{dataAgentOpenAiUrl}}/threads/{{threadId}}/messages?api-version={{apiVersion}}
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+Content-Type: application/json
+ActivityId: {{$guid}}
+
+
+
+
+### SEGUNDO AQUI
+### 2. Criar run para processar a pergunta
+### Use `stream: false` para o REST Client retornar um JSON comum com o run.
+### A resposta final ainda nao vem aqui; vem depois, em "Listar mensagens".
+# @name createRun
+POST {{dataAgentOpenAiUrl}}/threads/{{threadId}}/runs?api-version={{apiVersion}}
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+Content-Type: application/json
+ActivityId: {{$guid}}
+
+{
+  "assistant_id": "{{assistantId}}",
+  "stream": false
+}
+
+### TERCEIRO AQUII
+### 3. Consultar status do run
+### Execute repetidamente ate `status` ser `completed`.
+### Se retornar `queued` ou `in_progress`, aguarde alguns segundos e execute de novo.
+# @name getRun
+GET {{dataAgentOpenAiUrl}}/threads/{{threadId}}/runs/{{createRun.response.body.$.id}}?api-version={{apiVersion}}
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+Content-Type: application/json
+ActivityId: {{$guid}}
+
+
+### ========= NAO ESTA RETORNANDO A RESPOSTA =============
+### 4. Listar mensagens e obter a resposta final
+### Quando o run estiver `completed`, execute esta chamada.
+### A resposta final deve estar na mensagem com:
+### - role = assistant
+### - run_id = id do run criado acima
+###
+### Normalmente a mensagem mais recente vem primeiro.
+### Caminho mais comum:
+### data[0].content[0].text.value
+# @name listMessages
+GET {{dataAgentOpenAiUrl}}/threads/{{threadId}}/messages?api-version={{apiVersion}}&limit=10
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+Content-Type: application/json
+ActivityId: {{$guid}}
+
+### ========= NAO ESTA FUNCIONANDO =============
+### 5. Opcional - consultar steps do run
+### Use para diagnostico: ferramenta usada, status, possiveis erros e detalhes de execucao.
+# @name listRunSteps
+GET {{dataAgentOpenAiUrl}}/threads/{{threadId}}/runs/{{createRun.response.body.$.id}}/steps?api-version={{apiVersion}}&order=asc&limit=100
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+Content-Type: application/json
+ActivityId: {{$guid}}
+
+
+### Alternativa com streaming
+### Esta chamada devolve eventos SSE.
+### A resposta final aparece no evento `thread.message.completed`,
+### no campo `data.content[0].text.value`.
+###
+### No Postman/REST Client, streaming pode ser menos pratico para copiar a resposta final.
+### Para uso manual, prefira o fluxo sem streaming acima.
+# @name createRunStreaming
+POST {{dataAgentOpenAiUrl}}/threads/{{threadId}}/runs?api-version={{apiVersion}}
+Authorization: Bearer {{accessToken}}
+Accept: text/event-stream
+Content-Type: application/json
+ActivityId: {{$guid}}
+
+{
+  "assistant_id": "{{assistantId}}",
+  "stream": true
+}
+
+### pegar token
+
+https://login.microsoftonline.com/common/oauth2/v2.0/token?client-request-id=019e9828-606f-76e4-8bac-b33d2014d01e
