@@ -1,2 +1,5 @@
 requests
 python-dotenv
+azure-identity
+openai
+redis
